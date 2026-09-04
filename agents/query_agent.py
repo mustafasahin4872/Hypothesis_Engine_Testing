@@ -174,9 +174,23 @@ def compile_json_to_sql(query_json: dict[str, Any], dialect: str = "sqlite") -> 
         if sql_op in ("IS NULL", "IS NOT NULL"):
             where_parts.append(f"{q_col} {sql_op}")
         elif sql_op in ("IN", "NOT IN"):
-            vals = val if isinstance(val, (list, tuple)) else [val]
-            if vals:
-                where_parts.append(f"{q_col} {sql_op} ({', '.join(_lit(v) for v in vals)})")
+            # Check if val is a subquery specification (dict or list containing dict)
+            if isinstance(val, dict) and "table" in val:
+                subquery_dict = dict(val)
+                if not subquery_dict.get("columns") and subquery_dict.get("column"):
+                    subquery_dict["columns"] = [subquery_dict.pop("column")]
+                sub_sql = compile_json_to_sql(subquery_dict, dialect=dialect)
+                where_parts.append(f"{q_col} {sql_op} ({sub_sql})")
+            elif isinstance(val, (list, tuple)) and len(val) == 1 and isinstance(val[0], dict) and "table" in val[0]:
+                subquery_dict = dict(val[0])
+                if not subquery_dict.get("columns") and subquery_dict.get("column"):
+                    subquery_dict["columns"] = [subquery_dict.pop("column")]
+                sub_sql = compile_json_to_sql(subquery_dict, dialect=dialect)
+                where_parts.append(f"{q_col} {sql_op} ({sub_sql})")
+            else:
+                vals = val if isinstance(val, (list, tuple)) else [val]
+                if vals:
+                    where_parts.append(f"{q_col} {sql_op} ({', '.join(_lit(v) for v in vals)})")
         elif sql_op == "BETWEEN":
             if isinstance(val, (list, tuple)) and len(val) == 2:
                 where_parts.append(f"{q_col} BETWEEN {_lit(val[0])} AND {_lit(val[1])}")
@@ -219,13 +233,13 @@ class QueryAgent:
     """
     Doğal dil sorularını yapılandırılmış JSON formatına çeviren ve deterministik SQL üreten sorgu ajanı.
     """
-    def __init__(self, db_uri: str = "sqlite:///insight_generation_bot.db", model_name: str = "gpt-4o", api_key: Optional[str] = None):
+    def __init__(self, db_uri: str = "sqlite:///insight_generation_bot.db", model_name: str = "gpt-4o", api_key: Optional[str] = None, llm: Optional[Any] = None, db: Optional[Any] = None, schema: Optional[str] = None):
         self.db_uri = db_uri
         self.model_name = model_name
         self.api_key = api_key
-        self._db = None
-        self._llm = None
-        self._schema = None
+        self._db = db
+        self._llm = llm
+        self._schema = schema
 
     @property
     def db(self) -> SQLDatabase:

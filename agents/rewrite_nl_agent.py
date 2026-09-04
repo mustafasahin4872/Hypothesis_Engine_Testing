@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Any
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 import streamlit as st
@@ -12,10 +12,10 @@ class RewriteNLAgent:
     veritabanı şemasına uygun atomik alt sorulara ve test edilebilir ifadelere dönüştürür.
     """
 
-    def __init__(self, model_name: str = "gpt-4o", temperature: float = 0.0):
+    def __init__(self, model_name: str = "gpt-4o", temperature: float = 0.0, llm: Optional[Any] = None):
         self.model_name = model_name
         self.temperature = temperature
-        self._llm = None
+        self._llm = llm
 
     @property
     def llm(self):
