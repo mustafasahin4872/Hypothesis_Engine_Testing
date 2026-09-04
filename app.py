@@ -1,10 +1,12 @@
 import streamlit as st
 from langchain_core.prompts import PromptTemplate
-# Modüler mimari: Hibrit Ajanı (SQL + RAG) agent.py dosyasından çağırıyoruz!
-from agent import db, llm, agent_executor
+# Modüler mimari: Hibrit Ajanı ve Alt Ajanları agent.py dosyasından çağırıyoruz!
+from agent import db, llm, agent_executor, query_agent, rewrite_agent
+from logger import log_query
 import json
 import plotly.express as px
 import pandas as pd
+import time
 
 # --- WEB ARAYÜZÜ TASARIMI ---
 st.set_page_config(page_title="Hibrit Pazarlama İçgörü Motoru", page_icon="📊", layout="centered")
@@ -52,11 +54,7 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
         with st.status("🧠 1. Aşama: Stratejik makro soru yapılandırılıyor...", expanded=True) as status:
             if calisma_modu == "🤖 Otonom İçgörü Modu":
                 short_D_info = "Bir markanın sosyal medya performansı, müşteri şikayetleri ve demografik bilgileri."
-                hl_prompt = PromptTemplate.from_template(
-                    "Sen uzman bir pazarlama direktörüsün. Veritabanı özeti: {info}\n"
-                    "Lütfen marka sağlığını analiz etmek için vizyoner tek bir iş sorusu üret. Sadece soruyu yaz."
-                )
-                macro_question = (hl_prompt | llm).invoke({"info": short_D_info}).content
+                macro_question = rewrite_agent.generate_macro_question(short_D_info)
             else:
                 macro_question = manuel_soru
                 
@@ -65,33 +63,33 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
 
         with st.status("⚙️ 2. Aşama: Analiz rotası çiziliyor (SQL & RAG Yönlendirmesi)...", expanded=True) as status:
             d_schema = db.get_table_info()
-            ll_prompt = PromptTemplate.from_template(
-                "Sen kıdemli bir veri analistisin. Veritabanının şeması:\n{schema}\n\n"
-                "Stratejik soru: {question}\n\n"
-                "GÖREVİN: Bu soruyu çözmek için ajana rehberlik edecek 2 net alt soru kurgula.\n"
-                "BİLGİ YÖNLENDİRMESİ:\n"
-                "1. Eğer soru sayılar, oranlar, demografi veya duygularla ilgiliyse bunu ŞEMADAKİ sütunlara göre SQL sorusuna çevir.\n"
-                "2. Eğer soru şirket politikaları, vizyon metinleri veya uzun dokümanlarla ilgiliyse bunu 'dokuman_arama_araci' ile çözülecek bir soruya çevir.\n"
-                "3. KRİTİK: Soruların başına mutlaka tire (-) işareti koyarak liste halinde yaz."
-            )
-            sub_questions_text = (ll_prompt | llm).invoke({"question": macro_question, "schema": d_schema}).content
+            sub_questions_text, sub_questions = rewrite_agent.decompose_question(macro_question, d_schema)
             st.markdown(sub_questions_text)
             status.update(label="✅ 2. Aşama: Alt Sorular ve Rota Hazır!", state="complete", expanded=False)
 
         with st.status("🔍 3. Aşama: GPT-4o Hibrit Ajanı çalışıyor (Veri ve Doküman Taraması)...", expanded=True) as status:
             facts = []
             # Sinyal kaybını önlemek için güvenli ayrıştırıcı (tire ile başlayanları alır)
-            for line in sub_questions_text.split('\n'):
-                if line.strip().startswith('-'):
-                    soru = line.lstrip("-* ").strip()
-                    if soru:
-                        st.write(f"👉 *Araştırılıyor:* {soru}")
-                        try:
-                            ans = agent_executor.invoke({"input": soru})["output"]
-                            facts.append(ans)
-                            st.success(f"**Bulunan Kanıt:** {ans}")
-                        except Exception as e:
-                            st.error(f"Veri çekilemedi: {e}")
+            for soru in sub_questions:
+                if soru:
+                    st.write(f"👉 *Araştırılıyor:* {soru}")
+                    start_t = time.time()
+                    try:
+                        res = query_agent.execute_nl_query(soru)
+                        duration_ms = round((time.time() - start_t) * 1000, 2)
+                        log_query(
+                            question=soru,
+                            json_query=res.get("json_query", {}),
+                            sql=res.get("sql", ""),
+                            result=res.get("result", ""),
+                            duration_ms=duration_ms
+                        )
+                        fact_text = f"Soru: {soru} | Sonuç: {res.get('result', '')}"
+                        facts.append(fact_text)
+                        st.success(f"**Bulunan Kanıt:** {res.get('result', '')}")
+                    except Exception as e:
+                        log_query(question=soru, json_query={}, sql="", error=str(e))
+                        st.error(f"Veri çekilemedi: {e}")
             
             if not facts: st.warning("⚠️ Ne veritabanından ne de dokümanlardan kanıt toplanamadı.")
             status.update(label="✅ 3. Aşama: Kanıt Toplama Tamamlandı!", state="complete", expanded=False)
@@ -126,10 +124,10 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
                     "Veriler:\n{facts}\n\n"
                     "Beklenen Çıktı Formatı:\n"
                     "{{\n"
-                    "  \"title\": \"Grafik Başlığı\",\n"
-                    "  \"type\": \"bar\", \n"
-                    "  \"labels\": [\"Kategori 1\", \"Kategori 2\"],\n"
-                    "  \"values\": [10, 20]\n"
+                    '  "title": "Grafik Başlığı",\n'
+                    '  "type": "bar", \n'
+                    '  "labels": ["Kategori 1", "Kategori 2"],\n'
+                    '  "values": [10, 20]\n'
                     "}}"
                 )
                 chart_json_str = (chart_prompt | llm).invoke({"facts": facts_str}).content
@@ -164,25 +162,8 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
         
         with st.status("🧠 1. Aşama: Otomatik Hipotez Yapılandırılıyor...", expanded=True) as status:
             d_schema = db.get_table_info()
-            hyp_prompt = PromptTemplate.from_template(
-                "Sen kıdemli bir veri bilimcisisin. Veritabanı şeması:\n{schema}\n\n"
-                "Araştırma Konusu: {question}\n\n"
-                "GÖREVİN: Bu konuyu test etmek için şemadaki sütunları baz alan tek bir Alternatif Hipotez (H1) üretmek "
-                "ve SQL ajanının test edeceği 2 somut alt soru kurgulamak.\n\n"
-                "ÇOK ÖNEMLİ KURALLAR:\n"
-                "1. Aradığın veriler farklı tablolardaysa 'Tabloları JOIN yaparak birleştirin' şeklinde açık talimat ekle.\n"
-                "2. Sorular kesinlikle matematiksel (COUNT, MAX, AVG) olsun. Ham tweet metni çekme (LIMIT hatası almamak için).\n"
-                "3. Hipotezini 'EN ÇOK' gibi kesinleyici kelimeler yerine, daha esnek istatistiksel kavramlar üzerine kur.\n\n"
-                "FORMAT KURALI:\n"
-                "Hipotez (H1): [Hipotez cümlesi]\n"
-                "- [1. net SQL sorusu]\n"
-                "- [2. net SQL sorusu]"
-            )
-            hyp_text = (hyp_prompt | llm).invoke({"question": manuel_soru, "schema": d_schema}).content
+            hyp_text, sub_questions = rewrite_agent.formulate_hypothesis(manuel_soru, d_schema)
             st.markdown(hyp_text)
-            
-            # Sinyal kaybını önlemek için güvenli ayrıştırıcı (tire ile başlayanları alır)
-            sub_questions = [line.lstrip("-* ").strip() for line in hyp_text.split('\n') if line.strip().startswith('-')]
             status.update(label="✅ 1. Aşama: Hipotez Kurgulandı!", state="complete", expanded=False)
 
         with st.status("🔍 2. Aşama: Hipotez GPT-4o ile test ediliyor...", expanded=True) as status:
@@ -190,11 +171,22 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
             for soru in sub_questions:
                 if soru:
                     st.write(f"👉 *Test Ediliyor:* {soru}")
+                    start_t = time.time()
                     try:
-                        ans = agent_executor.invoke({"input": soru})["output"]
-                        facts.append(ans)
-                        st.success(f"**Bulunan Kanıt:** {ans}")
+                        res = query_agent.execute_nl_query(soru)
+                        duration_ms = round((time.time() - start_t) * 1000, 2)
+                        log_query(
+                            question=soru,
+                            json_query=res.get("json_query", {}),
+                            sql=res.get("sql", ""),
+                            result=res.get("result", ""),
+                            duration_ms=duration_ms
+                        )
+                        fact_text = f"Soru: {soru} | Sonuç: {res.get('result', '')}"
+                        facts.append(fact_text)
+                        st.success(f"**Bulunan Kanıt:** {res.get('result', '')}")
                     except Exception as e:
+                        log_query(question=soru, json_query={}, sql="", error=str(e))
                         st.error(f"Veri çekilemedi: {e}")
                         
             status.update(label="✅ 2. Aşama: Kanıtlar Toplandı!", state="complete", expanded=False)
@@ -225,19 +217,8 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
         
         with st.status("🧠 1. Aşama: Zaman Serisi ve Trend Analizi Kurgulanıyor...", expanded=True) as status:
             d_schema = db.get_table_info()
-            pred_prompt = PromptTemplate.from_template(
-                "Sen bir tahminleme (predictive) veri bilimcisisin. Veritabanı şeması:\n{schema}\n\n"
-                "Kullanıcının Tahmin Talebi: {question}\n\n"
-                "GÖREVİN: Geleceği tahmin edebilmemiz için bize GEÇMİŞ TRENDLERİ verecek 2 net SQL alt sorusu kurgulamak.\n"
-                "KURALLAR:\n"
-                "1. Zaman (date, timestamp, month vb.) sütunları varsa mutlaka onlara göre grupla (GROUP BY).\n"
-                "2. Eğer zaman sütunu yoksa, veriyi büyüklük veya kategori bazında sıralayarak (ORDER BY) bir trend yakalamaya çalış.\n"
-                "3. Soruların başına tire (-) koyarak liste halinde ver."
-            )
-            pred_text = (pred_prompt | llm).invoke({"question": manuel_soru, "schema": d_schema}).content
+            pred_text, sub_questions = rewrite_agent.decompose_predictive_trends(manuel_soru, d_schema)
             st.markdown(pred_text)
-            
-            sub_questions = [line.lstrip("-* ").strip() for line in pred_text.split('\n') if line.strip().startswith('-')]
             status.update(label="✅ 1. Aşama: Trend Sorguları Hazır!", state="complete", expanded=False)
 
         with st.status("🔍 2. Aşama: Geçmiş Veriler Toplanıyor...", expanded=True) as status:
@@ -245,11 +226,22 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
             for soru in sub_questions:
                 if soru:
                     st.write(f"👉 *Sorgulanıyor:* {soru}")
+                    start_t = time.time()
                     try:
-                        ans = agent_executor.invoke({"input": soru})["output"]
-                        facts.append(ans)
-                        st.success(f"**Bulunan Geçmiş Veri:** {ans}")
+                        res = query_agent.execute_nl_query(soru)
+                        duration_ms = round((time.time() - start_t) * 1000, 2)
+                        log_query(
+                            question=soru,
+                            json_query=res.get("json_query", {}),
+                            sql=res.get("sql", ""),
+                            result=res.get("result", ""),
+                            duration_ms=duration_ms
+                        )
+                        fact_text = f"Soru: {soru} | Sonuç: {res.get('result', '')}"
+                        facts.append(fact_text)
+                        st.success(f"**Bulunan Geçmiş Veri:** {res.get('result', '')}")
                     except Exception as e:
+                        log_query(question=soru, json_query={}, sql="", error=str(e))
                         st.error(f"Veri çekilemedi: {e}")
                         
             status.update(label="✅ 2. Aşama: Veriler Toplandı!", state="complete", expanded=False)
@@ -271,4 +263,4 @@ if st.button("🚀 Analizi Başlat", use_container_width=True):
 
             st.divider()
             st.subheader("🔮 Gelecek Projeksiyonu (Predictive Forecast)")
-            st.info(forecast_report, icon="📈")           
+            st.info(forecast_report, icon="📈")

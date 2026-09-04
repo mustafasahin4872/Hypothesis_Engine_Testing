@@ -3,39 +3,38 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
-# Hatalı eski kütüphane yerine, doğrudan ana çekirdek aracı (Tool) çağırıyoruz
 from langchain_core.tools import Tool
 import streamlit as st
-# --- 1. API ANAHTARLARI (GÜVENLİK BÖLGESİ) ---
-
-
+from agents.query_agent import QueryAgent, get_query_agent
+from agents.rewrite_nl_agent import RewriteNLAgent, get_rewrite_agent
 
 # --- 1. API ANAHTARLARI (GÜVENLİK BÖLGESİ - KASADAN ÇEKİLİYOR) ---
-# Artık şifreler kodda yazmıyor, Streamlit'in güvenli sunucusundan geliyor
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
-
-
+# Streamlit secrets veya ortam değişkenlerinden güvenli çekim
+try:
+    if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+    if hasattr(st, "secrets") and "PINECONE_API_KEY" in st.secrets:
+        os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+except Exception:
+    pass
 
 
 def get_hybrid_agent():
     # --- 2. SQL BAĞLANTISI (Sayılar ve Tablolar için) ---
-    db = SQLDatabase.from_uri("sqlite:///insight_generation_bot.db")
+    db_uri = "sqlite:///insight_generation_bot.db"
+    db = SQLDatabase.from_uri(db_uri)
     
     # --- 3. YAPAY ZEKA BEYNİ VE VEKTÖR MOTORU ---
     llm = ChatOpenAI(model="gpt-4o", temperature=0)
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
     # --- 4. RAG BAĞLANTISI (Metinler ve PDF'ler için) ---
-    # Pinecone'daki index adını buraya yazmayı unutma
     index_name = "pazarlama-verileri" 
     
     try:
         vectorstore = PineconeVectorStore(index_name=index_name, embedding=embeddings)
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
         
-        # IMPORT HATASINI KÖKÜNDEN ÇÖZEN YENİ KOD BLOĞU:
-        # Aracı dışarıdan çağırmak yerine, Tool sınıfıyla sıfırdan kendimiz yaratıyoruz
         rag_tool = Tool(
             name="dokuman_arama_araci",
             description="Markanın iade politikaları, PDF raporları veya SQL veritabanında OLMAYAN yapılandırılmamış (unstructured) metinleri araştırmak için bu aracı kullan.",
@@ -56,6 +55,11 @@ def get_hybrid_agent():
         verbose=False
     )
     
-    return db, llm, agent_executor
+    # --- 6. ALT AJANLAR (SPJQ Query Agent & Rewrite NL Agent) ---
+    query_agent = QueryAgent(db_uri=db_uri, model_name="gpt-4o")
+    rewrite_agent = RewriteNLAgent(model_name="gpt-4o")
+    
+    return db, llm, agent_executor, query_agent, rewrite_agent
 
-db, llm, agent_executor = get_hybrid_agent()
+
+db, llm, agent_executor, query_agent, rewrite_agent = get_hybrid_agent()
