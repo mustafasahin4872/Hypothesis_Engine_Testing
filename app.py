@@ -11,7 +11,13 @@ import time
 # --- WEB ARAYÜZÜ TASARIMI ---
 st.set_page_config(page_title="Hibrit Pazarlama İçgörü Motoru", page_icon="📊", layout="centered")
 
-st.title("📊 Gelişmiş Hibrit Analiz Platformu")
+col1, col2 = st.columns([3, 1], vertical_alignment="center")
+with col1:
+    st.title("📊 Gelişmiş Hibrit Analiz Platformu")
+with col2:
+    db_type = "ClickHouse" if query_agent.dialect == "clickhouse" else "SQLite"
+    st.button(f"🗄️ {db_type}", disabled=True, use_container_width=True)
+
 st.markdown("""
 Bu sistem, hem **SQL veritabanınızı** (sayılar ve demografi) hem de **Kurumsal Dokümanlarınızı** (RAG/Pinecone) aynı anda tarayabilir. Otomatize hipotez doğrulama çerçevesi işleterek fikirlerinizi bilimsel olarak sınayabilirsiniz.
 """)
