@@ -8,3 +8,6 @@ plotly
 pandas
 tiktoken
 sqlalchemy
+python-dotenv
+clickhouse-connect
+clickhouse-sqlalchemy

@@ -122,3 +122,19 @@ def log_query(question: str, json_query: dict, sql: str, result: any = None, dur
         logger.error(f"Query Failed: {question}", extra=extra_payload)
     else:
         logger.info(f"Query Executed: {question}", extra=extra_payload)
+
+
+def log_db_fallback(target_db: str, fallback_db: str = "sqlite:///insight_generation_bot.db", reason: str = None):
+    """
+    Hedef veritabanına (ClickHouse vb.) bağlanılamadığında SQLite yedeğine geçişi yapılandırılmış biçimde loglar.
+    """
+    extra_payload = {
+        "event_type": "database_fallback",
+        "target_db": target_db,
+        "fallback_db": fallback_db,
+        "reason": str(reason) if reason else None
+    }
+    logger.warning(
+        f"Database fallback triggered: {target_db} is unavailable. Using {fallback_db} instead.",
+        extra=extra_payload
+    )

@@ -1,17 +1,20 @@
 # pycache
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 .DS_Store
 
-# venv
+# Virtual Environment
 .venv/
 venv/
+env/
 
-# Logs
-*.log
-
-# Streamlit secrets
+# Streamlit Secrets
 .streamlit/secrets.toml
 secrets.toml
+!.streamlit/secrets.toml.example
 
+# Logs
+logs/*.log
+*.log
+!logs/.gitkeep

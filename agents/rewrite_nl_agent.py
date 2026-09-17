@@ -1,5 +1,6 @@
 import os
 from typing import List, Tuple, Optional, Any
+import re
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 import streamlit as st
@@ -32,6 +33,12 @@ class RewriteNLAgent:
             self._llm = ChatOpenAI(model=self.model_name, temperature=self.temperature)
         return self._llm
 
+    def _clean_sub_question(self, line: str) -> str:
+        """Alt soru satırından tire, yıldız ve olası parantez içi meta açıklamaları temizler."""
+        cleaned = line.lstrip("-* ").strip()
+        cleaned = re.sub(r"\s*\([^)]*(?:SQL|sorgu|tablo|örneğin|çözmek için)[^)]*\)\s*$", "", cleaned, flags=re.IGNORECASE).strip()
+        return cleaned
+
     def generate_macro_question(self, database_summary_info: str) -> str:
         """
         Otonom Mod için genel veritabanı özetinden vizyoner tek bir makro iş sorusu üretir.
@@ -51,15 +58,17 @@ class RewriteNLAgent:
             "Stratejik soru: {question}\n\n"
             "GÖREVİN: Bu soruyu çözmek için ajana rehberlik edecek 2 net alt soru kurgula.\n"
             "BİLGİ YÖNLENDİRMESİ:\n"
-            "1. Eğer soru sayılar, oranlar, demografi veya duygularla ilgiliyse bunu ŞEMADAKİ sütunlara göre SQL sorusuna çevir.\n"
+            "1. Eğer soru sayılar, oranlar, demografi veya duygularla ilgiliyse bunu ŞEMADAKİ sütunlara uygun tek ve net bir SQL sorusuna çevir.\n"
             "2. Eğer soru şirket politikaları, vizyon metinleri veya uzun dokümanlarla ilgiliyse bunu 'dokuman_arama_araci' ile çözülecek bir soruya çevir.\n"
-            "3. KRİTİK: Soruların başına mutlaka tire (-) işareti koyarak liste halinde yaz."
+            "3. KRİTİK KURALLAR:\n"
+            "   - Soruların başına mutlaka tire (-) işareti koyarak liste halinde yaz.\n"
+            "   - Her soru sadece doğrudan bir soru cümlesi olsun. Parantez içinde açıklama veya SQL tavsiyesi YAZMA."
         )
         raw_text = (ll_prompt | self.llm).invoke({"question": macro_question, "schema": schema}).content
         sub_questions = [
-            line.lstrip("-* ").strip()
+            self._clean_sub_question(line)
             for line in raw_text.split('\n')
-            if line.strip().startswith('-') and line.lstrip("-* ").strip()
+            if line.strip().startswith(('-', '*')) and self._clean_sub_question(line)
         ]
         return raw_text, sub_questions
 
@@ -73,8 +82,8 @@ class RewriteNLAgent:
             "GÖREVİN: Bu konuyu test etmek için şemadaki sütunları baz alan tek bir Alternatif Hipotez (H1) üretmek "
             "ve SQL ajanının test edeceği 2 somut alt soru kurgulamak.\n\n"
             "ÇOK ÖNEMLİ KURALLAR:\n"
-            "1. Aradığın veriler farklı tablolardaysa 'Tabloları JOIN yaparak birleştirin' şeklinde açık talimat ekle.\n"
-            "2. Sorular kesinlikle matematiksel (COUNT, MAX, AVG) olsun. Ham tweet metni çekme (LIMIT hatası almamak için).\n"
+            "1. Sorular kesinlikle matematiksel (COUNT, SUM, AVG) veya oran hesaplamaya uygun olsun.\n"
+            "2. Her bir soru tek ve net bir soru cümlesi olsun. Parantez içi açıklama veya teknik yönlendirme EKLEME.\n"
             "3. Hipotezini 'EN ÇOK' gibi kesinleyici kelimeler yerine, daha esnek istatistiksel kavramlar üzerine kur.\n\n"
             "FORMAT KURALI:\n"
             "Hipotez (H1): [Hipotez cümlesi]\n"
@@ -83,9 +92,9 @@ class RewriteNLAgent:
         )
         raw_text = (hyp_prompt | self.llm).invoke({"question": topic, "schema": schema}).content
         sub_questions = [
-            line.lstrip("-* ").strip()
+            self._clean_sub_question(line)
             for line in raw_text.split('\n')
-            if line.strip().startswith('-') and line.lstrip("-* ").strip()
+            if line.strip().startswith(('-', '*')) and self._clean_sub_question(line)
         ]
         return raw_text, sub_questions
 
@@ -98,15 +107,15 @@ class RewriteNLAgent:
             "Kullanıcının Tahmin Talebi: {question}\n\n"
             "GÖREVİN: Geleceği tahmin edebilmemiz için bize GEÇMİŞ TRENDLERİ verecek 2 net SQL alt sorusu kurgulamak.\n"
             "KURALLAR:\n"
-            "1. Zaman (date, timestamp, month vb.) sütunları varsa mutlaka onlara göre grupla (GROUP BY).\n"
+            "1. Zaman (date, created_at, created_year vb.) sütunları varsa mutlaka onlara göre grupla (GROUP BY).\n"
             "2. Eğer zaman sütunu yoksa, veriyi büyüklük veya kategori bazında sıralayarak (ORDER BY) bir trend yakalamaya çalış.\n"
-            "3. Soruların başına tire (-) koyarak liste halinde ver."
+            "3. Soruların başına tire (-) koyarak liste halinde ver. Açıklama metni ekleme."
         )
         raw_text = (pred_prompt | self.llm).invoke({"question": topic, "schema": schema}).content
         sub_questions = [
-            line.lstrip("-* ").strip()
+            self._clean_sub_question(line)
             for line in raw_text.split('\n')
-            if line.strip().startswith('-') and line.lstrip("-* ").strip()
+            if line.strip().startswith(('-', '*')) and self._clean_sub_question(line)
         ]
         return raw_text, sub_questions
 
