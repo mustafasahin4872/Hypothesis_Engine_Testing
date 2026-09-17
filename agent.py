@@ -42,11 +42,13 @@ def get_database_connection():
         ch_user = get_secret("CLICKHOUSE_USERNAME", "default")
         ch_pass = get_secret("CLICKHOUSE_PASSWORD", "")
         ch_db = get_secret("CLICKHOUSE_DB", "default")
-        ch_protocol = get_secret("CLICKHOUSE_PROTOCOL", "https" if str(ch_port) == "443" or "ngrok" in ch_host or "clickhouse.cloud" in ch_host else "http")
+        
+        is_secure = str(ch_port) == "443" or "ngrok" in ch_host or "clickhouse.cloud" in ch_host or get_secret("CLICKHOUSE_PROTOCOL") == "https"
+        protocol_param = "?protocol=https" if is_secure else ""
         
         auth = f"{ch_user}:{ch_pass}@" if (ch_user or ch_pass) else ""
-        ch_uri = f"clickhouse+{ch_protocol}://{auth}{ch_host}:{ch_port}/{ch_db}"
-        sanitized_target = f"clickhouse+{ch_protocol}://{ch_host}:{ch_port}/{ch_db}"
+        ch_uri = f"clickhouse+http://{auth}{ch_host}:{ch_port}/{ch_db}{protocol_param}"
+        sanitized_target = f"clickhouse+http://{ch_host}:{ch_port}/{ch_db}{protocol_param}"
         
         try:
             db = SQLDatabase.from_uri(ch_uri, include_tables=CLICKHOUSE_CORE_TABLES)
